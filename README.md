@@ -41,6 +41,8 @@ Next.js App Router, TypeScript, Tailwind CSS, Supabase Auth, Supabase PostgreSQL
 
 3. Apply the database migration. In the Supabase Dashboard, open **SQL Editor**, create a query, paste the contents of [`supabase/migrations/202609280001_initial_schema.sql`](supabase/migrations/202609280001_initial_schema.sql), and run it. It creates the tables, Auth profile trigger, RLS policies, RPC functions, avatar bucket/policies, indexes, and Realtime publication entry.
 
+   If the initial schema has already been applied, also run [`supabase/migrations/202609280002_revoke_anon_rpc.sql`](supabase/migrations/202609280002_revoke_anon_rpc.sql) in the SQL Editor. It removes anonymous execution grants from the private chat RPC functions.
+
 4. Configure Supabase Auth:
    - Under **Authentication → Providers → Email**, turn **off email confirmations**. The public User ID is mapped internally to a non-deliverable email address so it can use Supabase's password Auth; confirmation emails cannot be delivered to that address.
    - Under **Authentication → URL Configuration**, set the Site URL to `http://localhost:3000` for local work and add `http://localhost:3000/**` to Redirect URLs. Add the production and preview URLs after deployment.

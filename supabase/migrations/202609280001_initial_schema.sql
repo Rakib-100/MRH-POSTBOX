@@ -289,10 +289,10 @@ begin
 end;
 $$;
 
-revoke all on function public.search_profiles(text) from public;
-revoke all on function public.get_or_create_conversation(uuid) from public;
-revoke all on function public.list_conversations() from public;
-revoke all on function public.set_presence(boolean) from public;
+revoke all on function public.search_profiles(text) from public, anon;
+revoke all on function public.get_or_create_conversation(uuid) from public, anon;
+revoke all on function public.list_conversations() from public, anon;
+revoke all on function public.set_presence(boolean) from public, anon;
 grant execute on function public.search_profiles(text) to authenticated;
 grant execute on function public.get_or_create_conversation(uuid) to authenticated;
 grant execute on function public.list_conversations() to authenticated;

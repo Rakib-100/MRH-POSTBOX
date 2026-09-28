@@ -22,6 +22,15 @@ import { createClient } from "@/lib/supabase/client";
 import type { ConversationSummary, Message, SearchProfile } from "@/lib/supabase/database.types";
 import { useRouter } from "next/navigation";
 
+type PushStatus = "checking" | "unsupported" | "setup-required" | "unsubscribed" | "subscribed" | "denied" | "error";
+
+function decodeVapidKey(value: string) {
+  const padding = "=".repeat((4 - (value.length % 4)) % 4);
+  const base64 = (value + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const raw = window.atob(base64);
+  return Uint8Array.from(raw, (character) => character.charCodeAt(0));
+}
+
 function formatTime(value: string | null) {
   if (!value) return "";
   const date = new Date(value);
@@ -60,7 +69,7 @@ export function ChatApp({ userId }: { userId: string }) {
   const [mobileChatOpen, setMobileChatOpen] = useState(false);
   const messageEndRef = useRef<HTMLDivElement>(null);
   const chatViewportRef = useRef<HTMLElement>(null);
-  const [notificationPermission, setNotificationPermission] = useState<NotificationPermission | "unsupported" | null>(null);
+  const [pushStatus, setPushStatus] = useState<PushStatus>("checking");
 
   const loadConversations = useCallback(async () => {
     const { data } = await supabase.rpc("list_conversations");
@@ -102,6 +111,39 @@ export function ChatApp({ userId }: { userId: string }) {
   }, [loadConversations, supabase, userId]);
 
   useEffect(() => {
+    let mounted = true;
+    void (async () => {
+      if (!/android/i.test(navigator.userAgent) || !("serviceWorker" in navigator) || !("PushManager" in window)) {
+        setPushStatus("unsupported");
+        return;
+      }
+      if (!process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY) {
+        setPushStatus("setup-required");
+        return;
+      }
+      try {
+        await navigator.serviceWorker.register("/sw.js", { scope: "/", updateViaCache: "none" });
+        const registration = await navigator.serviceWorker.ready;
+        const subscription = await registration.pushManager.getSubscription();
+        if (!mounted) return;
+        if (!subscription) {
+          setPushStatus("unsubscribed");
+          return;
+        }
+        const response = await fetch("/api/push/subscriptions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ subscription: subscription.toJSON() }),
+        });
+        setPushStatus(response.ok ? "subscribed" : "error");
+      } catch {
+        if (mounted) setPushStatus("error");
+      }
+    })();
+    return () => { mounted = false; };
+  }, []);
+
+  useEffect(() => {
     const incomingChannel = supabase
       .channel(`incoming-messages:${userId}`)
       .on("postgres_changes", {
@@ -110,23 +152,8 @@ export function ChatApp({ userId }: { userId: string }) {
         table: "messages",
         filter: `receiver_id=eq.${userId}`,
       }, (payload) => {
-        const incoming = payload.new as Message;
+        void (payload.new as Message);
         void loadConversations();
-        if (
-          (document.visibilityState === "visible" && document.hasFocus()) ||
-          !("Notification" in window) ||
-          Notification.permission !== "granted"
-        ) return;
-
-        const notification = new Notification("New message · MRH-POSTBOX", {
-          body: incoming.message_text,
-          icon: "/favicon.ico",
-          tag: `message:${incoming.conversation_id}`,
-        });
-        notification.onclick = () => {
-          window.focus();
-          notification.close();
-        };
       })
       .subscribe();
 
@@ -290,6 +317,11 @@ export function ChatApp({ userId }: { userId: string }) {
       setMessages((current) => current.some((message) => message.id === data.id) ? current : [...current, data]);
       setMessageText("");
       void loadConversations();
+      void fetch("/api/push/send", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ messageId: data.id }),
+      }).catch(() => undefined);
     }
     setSending(false);
   }
@@ -308,21 +340,75 @@ export function ChatApp({ userId }: { userId: string }) {
     router.refresh();
   }
 
-  async function enableNotifications() {
-    if (!("Notification" in window)) {
-      setNotificationPermission("unsupported");
+  async function toggleAndroidPush() {
+    if (
+      !/android/i.test(navigator.userAgent) ||
+      !("Notification" in window) ||
+      !("serviceWorker" in navigator) ||
+      !("PushManager" in window)
+    ) {
+      setPushStatus("unsupported");
       return;
     }
-    setNotificationPermission(await Notification.requestPermission());
+    const publicKey = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
+    if (!publicKey) {
+      setPushStatus("setup-required");
+      return;
+    }
+
+    setPushStatus("checking");
+    try {
+      const registration = await navigator.serviceWorker.ready;
+      const subscription = await registration.pushManager.getSubscription();
+      if (subscription) {
+        const response = await fetch("/api/push/subscriptions", {
+          method: "DELETE",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ endpoint: subscription.endpoint }),
+        });
+        if (!response.ok) throw new Error("Could not remove push subscription");
+        await subscription.unsubscribe();
+        setPushStatus("unsubscribed");
+        return;
+      }
+
+      const permission = await Notification.requestPermission();
+      if (permission !== "granted") {
+        setPushStatus(permission === "denied" ? "denied" : "unsubscribed");
+        return;
+      }
+      const newSubscription = await registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: decodeVapidKey(publicKey),
+      });
+      const response = await fetch("/api/push/subscriptions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ subscription: newSubscription.toJSON() }),
+      });
+      if (!response.ok) {
+        await newSubscription.unsubscribe();
+        throw new Error("Could not save push subscription");
+      }
+      setPushStatus("subscribed");
+    } catch {
+      setPushStatus("error");
+    }
   }
 
-  const notificationLabel = notificationPermission === "granted"
-    ? "Browser notifications are enabled"
-    : notificationPermission === "denied"
-      ? "Allow notifications in your browser settings"
-      : notificationPermission === "unsupported"
-        ? "This browser does not support notifications"
-        : "Enable browser notifications";
+  const pushLabel = pushStatus === "subscribed"
+    ? "Android push notifications are enabled"
+    : pushStatus === "denied"
+      ? "Allow notifications in Android app settings"
+      : pushStatus === "unsupported"
+        ? "Android Chrome push notifications are not available here"
+        : pushStatus === "setup-required"
+          ? "Push notification keys are not configured"
+          : pushStatus === "error"
+            ? "Could not set up Android push notifications"
+            : pushStatus === "checking"
+              ? "Checking Android push notifications"
+              : "Enable Android push notifications";
 
   const showingSearch = query.trim().length >= 2;
   const searching = showingSearch && deferredQuery.trim() !== resultQuery;
@@ -346,13 +432,13 @@ export function ChatApp({ userId }: { userId: string }) {
             </Link>
             <div className="flex items-center gap-1">
               <button
-                onClick={() => void enableNotifications()}
+                onClick={() => void toggleAndroidPush()}
                 className="icon-button"
-                aria-label={notificationLabel}
-                title={notificationLabel}
-                disabled={notificationPermission === "unsupported"}
+                aria-label={pushLabel}
+                title={pushLabel}
+                disabled={pushStatus === "checking" || pushStatus === "unsupported" || pushStatus === "setup-required"}
               >
-                {notificationPermission === "denied" || notificationPermission === "unsupported" ? <BellOff size={18} /> : <Bell size={18} />}
+                {pushStatus === "subscribed" ? <Bell size={18} /> : <BellOff size={18} />}
               </button>
               <Link href="/profile" className="icon-button" aria-label="Edit profile" title="Profile"><UserRound size={18} /></Link>
               <button onClick={handleLogout} className="icon-button" aria-label="Sign out" title="Sign out"><LogOut size={18} /></button>

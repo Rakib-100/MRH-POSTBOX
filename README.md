@@ -9,6 +9,8 @@ MRH-POSTBOX is a private, one-to-one messaging web app. Members create an accoun
 - Realtime text messages, read/unread counts, timestamps, and recent message history
 - Profile name, bio, and profile picture editing
 - Online status and last-seen heartbeat
+- Optional browser notifications for incoming messages while the chat tab is in the background
+- Mobile chat layout follows the visible viewport when the on-screen keyboard opens
 - Responsive conversation list and chat view
 - PostgreSQL Row Level Security for profiles, conversations, messages, and avatar uploads
 
@@ -93,5 +95,6 @@ If `origin` already exists, do not add it again. `.env.local` is ignored by Git;
 - RLS derives identity from the verified Supabase session. The browser never receives a service-role key.
 - Avatar images are in a public-read bucket because they are profile pictures; writes are limited to the signed-in user's own folder.
 - Presence is a lightweight heartbeat. A browser that loses power or network without signing out can appear online until its last heartbeat becomes stale; the interface treats heartbeats older than 90 seconds as offline.
+- Browser notifications require the user to enable permission from the chat page and only work while the site is open in a supported browser; this MVP does not include push notifications when the browser is fully closed.
 - The chat loads the latest 100 messages per conversation. This MVP does not include message pagination, password reset, email verification, attachments, or group chat.
 - A live Supabase project and its URL/key are required to exercise registration, chat, storage, and Realtime. No credentials are included in this repository.

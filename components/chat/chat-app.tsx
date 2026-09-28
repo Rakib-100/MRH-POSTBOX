@@ -5,6 +5,8 @@ import { useCallback, useDeferredValue, useEffect, useRef, useState, type FormEv
 import {
   ArrowLeft,
   ArrowUpRight,
+  Bell,
+  BellOff,
   Check,
   LogOut,
   MessageCircle,
@@ -57,6 +59,8 @@ export function ChatApp({ userId }: { userId: string }) {
   const [error, setError] = useState("");
   const [mobileChatOpen, setMobileChatOpen] = useState(false);
   const messageEndRef = useRef<HTMLDivElement>(null);
+  const chatViewportRef = useRef<HTMLElement>(null);
+  const [notificationPermission, setNotificationPermission] = useState<NotificationPermission | "unsupported" | null>(null);
 
   const loadConversations = useCallback(async () => {
     const { data } = await supabase.rpc("list_conversations");
@@ -96,6 +100,62 @@ export function ChatApp({ userId }: { userId: string }) {
       void supabase.rpc("set_presence", { online: false });
     };
   }, [loadConversations, supabase, userId]);
+
+  useEffect(() => {
+    const incomingChannel = supabase
+      .channel(`incoming-messages:${userId}`)
+      .on("postgres_changes", {
+        event: "INSERT",
+        schema: "public",
+        table: "messages",
+        filter: `receiver_id=eq.${userId}`,
+      }, (payload) => {
+        const incoming = payload.new as Message;
+        void loadConversations();
+        if (
+          (document.visibilityState === "visible" && document.hasFocus()) ||
+          !("Notification" in window) ||
+          Notification.permission !== "granted"
+        ) return;
+
+        const notification = new Notification("New message · MRH-POSTBOX", {
+          body: incoming.message_text,
+          icon: "/favicon.ico",
+          tag: `message:${incoming.conversation_id}`,
+        });
+        notification.onclick = () => {
+          window.focus();
+          notification.close();
+        };
+      })
+      .subscribe();
+
+    return () => {
+      void supabase.removeChannel(incomingChannel);
+    };
+  }, [loadConversations, supabase, userId]);
+
+  useEffect(() => {
+    const viewport = window.visualViewport;
+    const chatViewport = chatViewportRef.current;
+    if (!viewport || !chatViewport) return;
+
+    const updateChatViewport = () => {
+      chatViewport.style.setProperty("--chat-visible-height", `${viewport.height}px`);
+      chatViewport.style.setProperty("--chat-visible-top", `${viewport.offsetTop}px`);
+    };
+
+    updateChatViewport();
+    viewport.addEventListener("resize", updateChatViewport);
+    viewport.addEventListener("scroll", updateChatViewport);
+    window.addEventListener("resize", updateChatViewport);
+
+    return () => {
+      viewport.removeEventListener("resize", updateChatViewport);
+      viewport.removeEventListener("scroll", updateChatViewport);
+      window.removeEventListener("resize", updateChatViewport);
+    };
+  }, []);
 
   useEffect(() => {
     const term = deferredQuery.trim();
@@ -248,6 +308,22 @@ export function ChatApp({ userId }: { userId: string }) {
     router.refresh();
   }
 
+  async function enableNotifications() {
+    if (!("Notification" in window)) {
+      setNotificationPermission("unsupported");
+      return;
+    }
+    setNotificationPermission(await Notification.requestPermission());
+  }
+
+  const notificationLabel = notificationPermission === "granted"
+    ? "Browser notifications are enabled"
+    : notificationPermission === "denied"
+      ? "Allow notifications in your browser settings"
+      : notificationPermission === "unsupported"
+        ? "This browser does not support notifications"
+        : "Enable browser notifications";
+
   const showingSearch = query.trim().length >= 2;
   const searching = showingSearch && deferredQuery.trim() !== resultQuery;
   const loadingMessages = Boolean(active && loadedConversationId !== active.id);
@@ -256,7 +332,11 @@ export function ChatApp({ userId }: { userId: string }) {
     : null;
 
   return (
-    <main className="h-dvh overflow-hidden bg-[var(--paper)] p-0 sm:p-4 lg:p-6">
+    <main
+      ref={chatViewportRef}
+      style={{ height: "var(--chat-visible-height, 100dvh)", top: "var(--chat-visible-top, 0px)" }}
+      className="fixed inset-x-0 top-0 overflow-hidden bg-[var(--paper)] p-0 sm:p-4 lg:p-6"
+    >
       <div className="chat-frame mx-auto flex h-full max-w-[1500px] overflow-hidden bg-white sm:rounded-[8px]">
         <aside className={`chat-sidebar flex w-full shrink-0 flex-col border-r border-[var(--line)] bg-[var(--paper)] sm:w-[340px] lg:w-[370px] ${mobileChatOpen ? "hidden sm:flex" : "flex"}`}>
           <div className="flex items-center justify-between px-5 pb-4 pt-5 sm:px-6 sm:pt-6">
@@ -265,6 +345,15 @@ export function ChatApp({ userId }: { userId: string }) {
               <span>MRH-<b>POSTBOX</b></span>
             </Link>
             <div className="flex items-center gap-1">
+              <button
+                onClick={() => void enableNotifications()}
+                className="icon-button"
+                aria-label={notificationLabel}
+                title={notificationLabel}
+                disabled={notificationPermission === "unsupported"}
+              >
+                {notificationPermission === "denied" || notificationPermission === "unsupported" ? <BellOff size={18} /> : <Bell size={18} />}
+              </button>
               <Link href="/profile" className="icon-button" aria-label="Edit profile" title="Profile"><UserRound size={18} /></Link>
               <button onClick={handleLogout} className="icon-button" aria-label="Sign out" title="Sign out"><LogOut size={18} /></button>
             </div>

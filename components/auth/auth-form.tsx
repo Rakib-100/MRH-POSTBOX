@@ -60,9 +60,23 @@ export function AuthForm({ mode }: AuthFormProps) {
           options: { data: { user_id: userId, full_name: fullName.trim() } },
         });
         if (signUpError) {
-          setError(signUpError.message.toLowerCase().includes("duplicate") || signUpError.message.toLowerCase().includes("already") || signUpError.code === "23505"
-            ? "That User ID is already registered."
-            : "We couldn't create this account. Check that ID is available and try again.");
+          const message = signUpError.message.toLowerCase();
+          const code = signUpError.code?.toLowerCase();
+          if (message.includes("duplicate") || message.includes("already") || code === "23505" || code === "email_exists") {
+            setError("That User ID is already registered. Sign in instead or use another ID.");
+          } else if (code === "signup_disabled") {
+            setError("New accounts are disabled in this Supabase project. Enable signups under Authentication settings.");
+          } else if (code === "weak_password" || message.includes("password")) {
+            setError("Supabase rejected that password. Choose a stronger password with at least 8 characters.");
+          } else if (code === "email_address_invalid" || message.includes("invalid email")) {
+            setError("Supabase Auth rejected the internal account identifier. Check that Email sign-in is enabled in Supabase.");
+          } else if (["23502", "23503", "23514"].includes(code ?? "") || message.includes("database error saving new user")) {
+            setError("Supabase could not create the profile. Run the initial database migration in the SQL Editor, then try again.");
+          } else if (signUpError.status === 429) {
+            setError("Too many signup attempts. Wait a little and try again.");
+          } else {
+            setError("Supabase could not create the account. Check the database migration and Email sign-in settings, then try again.");
+          }
         } else if (!data.session) {
           setSuccess("Your account is ready. Sign in to continue.");
         } else {
@@ -129,6 +143,7 @@ export function AuthForm({ mode }: AuthFormProps) {
               <label className="field-label">
                 11-digit User ID
                 <span className="field-wrap"><span className="field-prefix">ID</span><input inputMode="numeric" autoComplete="username" value={userId} onChange={(event) => setUserId(event.target.value.replace(/\D/g, "").slice(0, 11))} maxLength={11} placeholder="01234567890" required /></span>
+                <span className="mt-1 block text-right text-[10px] font-normal text-[var(--muted)]">{userId.length}/11 digits</span>
               </label>
               <label className="field-label">
                 Password

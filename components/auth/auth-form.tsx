@@ -74,6 +74,11 @@ export function AuthForm({ mode }: AuthFormProps) {
             setError("Supabase could not create the profile. Run the initial database migration in the SQL Editor, then try again.");
           } else if (signUpError.status === 429) {
             setError("Too many signup attempts. Wait a little and try again.");
+          } else if (signUpError.status === 401) {
+            const safeMessage = signUpError.message
+              .replace(/[A-Z0-9._%+-]+@users\.mrh-postbox\.invalid/gi, "[internal account]")
+              .slice(0, 160);
+            setError(`Supabase Auth rejected this request: ${safeMessage || "Unauthorized"}. Check the project's public API key.`);
           } else {
             const diagnostic = [code ?? "unknown", signUpError.status ? `HTTP ${signUpError.status}` : ""]
               .filter(Boolean)

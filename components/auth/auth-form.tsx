@@ -70,12 +70,15 @@ export function AuthForm({ mode }: AuthFormProps) {
             setError("Supabase rejected that password. Choose a stronger password with at least 8 characters.");
           } else if (code === "email_address_invalid" || message.includes("invalid email")) {
             setError("Supabase Auth rejected the internal account identifier. Check that Email sign-in is enabled in Supabase.");
-          } else if (["23502", "23503", "23514"].includes(code ?? "") || message.includes("database error saving new user")) {
+          } else if (["23502", "23503", "23514", "unexpected_failure"].includes(code ?? "") || message.includes("database error")) {
             setError("Supabase could not create the profile. Run the initial database migration in the SQL Editor, then try again.");
           } else if (signUpError.status === 429) {
             setError("Too many signup attempts. Wait a little and try again.");
           } else {
-            setError("Supabase could not create the account. Check the database migration and Email sign-in settings, then try again.");
+            const diagnostic = [code ?? "unknown", signUpError.status ? `HTTP ${signUpError.status}` : ""]
+              .filter(Boolean)
+              .join(", ");
+            setError(`Supabase rejected signup (${diagnostic}). Check the latest entry under Supabase Dashboard → Logs → Auth.`);
           }
         } else if (!data.session) {
           setSuccess("Your account is ready. Sign in to continue.");
